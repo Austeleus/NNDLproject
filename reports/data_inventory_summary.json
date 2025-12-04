@@ -1,0 +1,10 @@
+{
+  "total_images": 6288,
+  "num_superclasses": 3,
+  "num_subclasses": 87,
+  "min_subclass_count": 49,
+  "max_subclass_count": 102,
+  "rare_threshold": 30,
+  "num_rare_subclasses": 0,
+  "rare_subclasses": []
+}

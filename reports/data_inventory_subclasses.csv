@@ -1,0 +1,88 @@
+subclass_index,subclass_name,superclass_index,superclass_name,count
+4,"great grey owl, great gray owl, Strix nebulosa",0,bird,100
+6,ptarmigan,0,bird,100
+24,"bald eagle, American eagle, Haliaeetus leucocephalus",0,bird,100
+27,"water ouzel, dipper",0,bird,100
+28,black grouse,0,bird,100
+30,vulture,0,bird,100
+75,chickadee,0,bird,100
+84,magpie,0,bird,100
+5,bustard,0,bird,50
+8,hen,0,bird,50
+11,pelican,0,bird,50
+14,"junco, snowbird",0,bird,50
+16,cock,0,bird,50
+19,"brambling, Fringilla montifringilla",0,bird,50
+20,"king penguin, Aptenodytes patagonica",0,bird,50
+26,"albatross, mollymawk",0,bird,50
+40,"red-backed sandpiper, dunlin, Erolia alpina",0,bird,50
+41,"redshank, Tringa totanus",0,bird,50
+42,"oystercatcher, oyster catcher",0,bird,50
+51,"ostrich, Struthio camelus",0,bird,50
+56,bulbul,0,bird,50
+59,"house finch, linnet, Carpodacus mexicanus",0,bird,50
+60,"goldfinch, Carduelis carduelis",0,bird,50
+73,dowitcher,0,bird,50
+78,"indigo bunting, indigo finch, indigo bird, Passerina cyanea",0,bird,50
+80,"American coot, marsh hen, mud hen, water hen, Fulica americana",0,bird,50
+82,"ruddy turnstone, Arenaria interpres",0,bird,50
+83,"robin, American robin, Turdus migratorius",0,bird,50
+86,"European gallinule, Porphyrio porphyrio",0,bird,50
+7,"Pekinese, Pekingese, Peke",1,dog,100
+18,Blenheim spaniel,1,dog,100
+21,Chihuahua,1,dog,100
+22,Japanese spaniel,1,dog,100
+31,Shih-Tzu,1,dog,100
+36,"basset, basset hound",1,dog,100
+37,"Maltese dog, Maltese terrier, Maltese",1,dog,100
+46,papillon,1,dog,100
+49,"bloodhound, sleuthhound",1,dog,100
+62,"Afghan hound, Afghan",1,dog,100
+64,Rhodesian ridgeback,1,dog,100
+65,beagle,1,dog,100
+70,toy terrier,1,dog,100
+0,"Scotch terrier, Scottish terrier, Scottie",1,dog,49
+2,standard schnauzer,1,dog,49
+9,"Lhasa, Lhasa apso",1,dog,49
+10,Lakeland terrier,1,dog,49
+12,"Tibetan terrier, chrysanthemum dog",1,dog,49
+17,"cairn, cairn terrier",1,dog,49
+23,"Dandie Dinmont, Dandie Dinmont terrier",1,dog,49
+25,"Airedale, Airedale terrier",1,dog,49
+32,giant schnauzer,1,dog,49
+38,"Sealyham terrier, Sealyham",1,dog,49
+45,Australian terrier,1,dog,49
+53,soft-coated wheaten terrier,1,dog,49
+54,West Highland white terrier,1,dog,49
+77,"silky terrier, Sydney silky",1,dog,49
+79,"Boston bull, Boston terrier",1,dog,49
+85,miniature schnauzer,1,dog,49
+35,"thunder snake, worm snake, Carphophis amoenus",2,reptile,102
+63,"bullfrog, Rana catesbeiana",2,reptile,102
+66,"green lizard, Lacerta viridis",2,reptile,102
+29,"spotted salamander, Ambystoma maculatum",2,reptile,101
+57,alligator lizard,2,reptile,101
+61,"common newt, Triturus vulgaris",2,reptile,101
+69,"tree frog, tree-frog",2,reptile,101
+81,"ringneck snake, ring-necked snake, ring snake",2,reptile,101
+1,"African chameleon, Chamaeleo chamaeleon",2,reptile,100
+43,"American alligator, Alligator mississipiensis",2,reptile,100
+44,"hognose snake, puff adder, sand viper",2,reptile,100
+47,"Komodo dragon, Komodo lizard, dragon lizard, giant lizard, Varanus komodoensis",2,reptile,100
+50,"European fire salamander, Salamandra salamandra",2,reptile,100
+52,triceratops,2,reptile,100
+58,"African crocodile, Nile crocodile, Crocodylus niloticus",2,reptile,100
+71,"Gila monster, Heloderma suspectum",2,reptile,100
+72,"axolotl, mud puppy, Ambystoma mexicanum",2,reptile,100
+76,"green snake, grass snake",2,reptile,100
+33,"common iguana, iguana, Iguana iguana",2,reptile,51
+3,terrapin,2,reptile,50
+55,"loggerhead, loggerhead turtle, Caretta caretta",2,reptile,50
+13,agama,2,reptile,49
+15,mud turtle,2,reptile,49
+34,"tailed frog, bell toad, ribbed toad, tailed toad, Ascaphus trui",2,reptile,49
+39,"frilled lizard, Chlamydosaurus kingi",2,reptile,49
+48,"American chameleon, anole, Anolis carolinensis",2,reptile,49
+67,banded gecko,2,reptile,49
+68,"leatherback turtle, leatherback, leathery turtle, Dermochelys coriacea",2,reptile,49
+74,"whiptail, whiptail lizard",2,reptile,49

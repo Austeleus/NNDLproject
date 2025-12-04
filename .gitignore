@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.idea/
+
+# Training artifacts
+runs/
+logs/
+reports/figures/
+checkpoints/
+
+# Data (avoid committing raw datasets)
+data/
+project_data/

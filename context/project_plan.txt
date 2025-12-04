@@ -1,0 +1,581 @@
+# Project Plan: Hierarchical Open-Set Image Classification
+# Competition: Bird, Dog, Reptile + Novel Class Detection
+
+---
+
+## 1. The Core Challenge
+
+**What we're solving:**
+- Predict super-class (Bird/Dog/Reptile) AND sub-class (specific breed/species)
+- Handle images from completely unknown classes (predict "Novel")
+- Output calibrated probabilities for Cross-Entropy metric (not just binary yes/no)
+
+**The critical shift from baseline:**
+- CLIP uses zero-shot classification (no fine-tuning on training data)
+- We'll use supervised learning + explicit novelty training
+- CLIP struggles with novel detection (32% super, 0.24% sub accuracy on unseen)
+- Our focus: Train the model to recognize what it doesn't know
+
+---
+
+## 2. Architecture Decisions
+
+### 2.1 Backbone: Modified ResNet-50
+
+**The problem with standard approaches:**
+- **Vision Transformers:** Need massive data (>100k images) and high resolution (224×224+). We have 6.6k images at 64×64 → severe overfitting
+- **Standard ResNet-50:** First layer is 7×7 conv with stride=2, then MaxPool with stride=2. This reduces 64×64 → 16×16 immediately, destroying fine-grained texture information needed to distinguish a Beagle from a Terrier
+
+**Our solution:**
+- Replace the input stem: Use 3×3 conv with stride=1, remove MaxPool
+- This keeps spatial resolution at 64×64 longer, preserving details
+- Load ImageNet pretrained weights for the core layers (layer1-4) but randomly initialize our new conv1
+
+**Why this beats the alternatives:**
+- vs Training from scratch: Pretrained features (edges, textures, shapes) are universal and prevent overfitting
+- vs Using standard pretrained ResNet: We preserve the spatial information needed for 64×64 images
+- vs Smaller models (ResNet-18): We need capacity for 30-40 fine-grained sub-classes
+
+**Risk Check: Is ResNet-50 Too Big?**
+- **Concern:** ResNet-50 has 23M parameters; we only have 4.5k training images (after splits) → potential overfitting
+- **Mitigation plan:**
+  - In Week 1, train BOTH ResNet-50 and ResNet-34 (21M params) or ConvNeXt-Tiny (28M but more efficient)
+  - Compare validation accuracy after 10 epochs
+  - If ResNet-50 overfits (train acc >95%, val acc <85%), switch to lighter backbone
+  - If both perform similarly on val, choose ResNet-50 for capacity on sub-class head
+- **Decision point:** End of Week 1 (don't commit to ResNet-50 without validation)
+
+**Why check early:**
+- If we discover ResNet-50 overfits after implementing everything else, we've wasted 2-3 weeks
+- Lightweight backbones (ResNet-34, EfficientNet-B0) may be sufficient with strong augmentation
+- Better to validate the capacity assumption than assume
+
+### 2.2 Dual-Head Architecture
+
+**Design:**
+- Single shared encoder (modified ResNet-50) → 2048-dim feature vector
+- Two separate classification heads:
+  - Super-class head: 2048 → 3 logits (Bird, Dog, Reptile)
+  - Sub-class head: 2048 → N logits (all training sub-classes)
+
+**Why shared encoder:**
+- **Multi-task learning synergy:** Knowing it's a "Dog" helps predict "Beagle" (narrows possibilities). Recognizing "Chihuahua" features reinforces "Dog" prediction
+- **Parameter efficiency:** 6.6k images isn't enough to train two separate ResNet-50s
+- **Feature reuse:** Early layers detect universal features (eyes, fur, scales), deeper layers specialize
+
+**Why not a single hierarchical head:**
+- We need separate probability distributions for evaluation (super-class CE and sub-class CE are scored independently)
+- Allows us to apply different novelty thresholds (super-class vs sub-class have different difficulty)
+
+---
+
+## 3. The Novel Class Problem
+
+### 3.1 Why we need a new approach
+
+**The baseline tries:** Post-hoc thresholding (if confidence < threshold → Novel)
+
+**Why this fails:**
+- Neural networks are overconfident (can output 99% confidence on garbage inputs)
+- No training signal teaches the model to recognize novelty
+- Can't output a probability for "Novel" (needed for Cross-Entropy metric)
+
+### 3.2 Virtual Logit: Dynamic Novel Probability
+
+**The core idea:**
+- Add a 4th logit to the super-class head (and N+1-th to sub-class head)
+- This logit isn't computed from learned weights—it's computed from the model's uncertainty
+- Formula: `Novel_logit = α - β × Energy`
+  - **Energy** = how uncertain the model is (high energy = confused)
+  - **α, β** = learnable parameters that calibrate the threshold
+
+**Exact Mathematical Definition:**
+
+For super-class head with logits z = [z_bird, z_dog, z_reptile]:
+```
+Energy = -log(Σ exp(z_k / T))    where T = 1.0 (temperature, can be tuned)
+       = -logsumexp(z / T)        (numerically stable form)
+
+Novel_logit = α - β × Energy      where α, β are nn.Parameter (learnable scalars)
+
+Final logits = [z_bird, z_dog, z_reptile, Novel_logit]
+Probabilities = softmax([z_bird, z_dog, z_reptile, α - β × Energy])
+```
+
+**Numerical Stability Considerations:**
+- **Energy range:** Typically -10 to 10 for well-trained networks
+- **Risk:** If β is too large, Novel_logit can explode (→ P(Novel) = 1.0 always)
+- **Solution 1 (Clamping):** Clamp Novel_logit to [-20, 20] before softmax
+- **Solution 2 (Regularization):** Add L2 penalty on (α, β) to keep them moderate
+- **Solution 3 (Feature normalization):** Use cosine classifier (normalize features to unit sphere)
+  - Cosine classifier: Replace `z_k = W_k · features` with `z_k = cos_sim(W_k, features) × scale`
+  - This bounds logits naturally to [-scale, +scale] → energy is more stable
+
+**Recommended Approach:**
+- Initialize: α = 0.0, β = 1.0
+- Use cosine classifier for both super-class and sub-class heads (stabilizes logits)
+- Clamp Novel_logit to [-15, 15] as safety (rarely triggers if cosine is used)
+- Monitor during training: If P(Novel) is always >0.9 or <0.1, β is miscalibrated
+
+**Why this works:**
+- When the model sees a known class: Energy is low (e.g., -8) → Novel_logit = 0 - 1×(-8) = -8 → P(Novel) ≈ 0
+- When the model sees an unknown class: Energy is high (e.g., -1) → Novel_logit = 0 - 1×(-1) = -1 → P(Novel) increases
+- We get a valid probability distribution: P(Bird) + P(Dog) + P(Reptile) + P(Novel) = 1.0
+
+**Why better than alternatives:**
+- vs Fixed threshold: α and β are learned during training, automatically calibrating to the data
+- vs Training a "Novel" output node: We don't have training examples of "unknown unknowns"
+- vs Mahalanobis distance: Simpler, end-to-end differentiable, doesn't require storing class centroids
+
+### 3.3 Outlier Exposure: Teaching the Model to Say "I Don't Know"
+
+**The strategy:**
+- Hold out 10% of the training data (complete sub-classes, like "Beagle" and "Parrot")
+- During training, occasionally show these held-out images to the model
+- When the model sees them, penalize it if it confidently predicts any known class
+- Force it to output high P(Novel) instead
+
+**Why this is critical:**
+- Without this, the model never learns what "unseen" looks like
+- The virtual logit (α, β) learns to activate when features don't match known patterns
+- Simulates the test condition: "You'll see images from classes I never showed you"
+
+**Why 10% holdout (not 20%):**
+- 20% is too aggressive—reduces training data from 6.6k → 5.3k
+- For rare classes (mud turtle with 50 images), 20% might leave only 30-40 training examples
+- 10% balances: enough outlier examples (~660 images) without starving the main task
+
+---
+
+## 4. Hierarchical Consistency
+
+**The problem:**
+- What if super-class predicts "Novel" but sub-class predicts "Chihuahua"?
+- What if super-class predicts "Dog" but sub-class predicts "Parrot"?
+
+**The solution: Hierarchical Override**
+1. First check super-class: If P(Novel) > θ_super → return (Novel, Novel), done
+   - **θ_super** is tuned on validation (typically 0.5-0.6)
+2. Otherwise, take the predicted super-class (Bird/Dog/Reptile)
+3. Mask the sub-class logits: Set all invalid sub-classes to -infinity
+   - Example: If super="Dog", mask out all bird and reptile sub-classes
+4. Recompute sub-class probabilities from masked logits
+5. Check if sub-class P(Novel) > θ_sub → return (super-class, Novel)
+   - **θ_sub** is tuned on validation (typically 0.6-0.7, higher than super)
+6. Otherwise return (super-class, predicted sub-class)
+
+**Critical:** The thresholds θ_super and θ_sub are NOT fixed at 0.5—they are tuned on the validation set (see Section 6.2) and stored with the model checkpoint.
+
+**Why this works:**
+- Enforces logical consistency (no "Dog-Parrot" predictions)
+- Respects the hierarchy (super-class decision constrains sub-class space)
+- Allows for "Dog-Novel" (seen super-class, unseen sub-class)
+
+**Why hard masking (set to -infinity) vs soft weighting:**
+- Hard constraint: A Chihuahua literally cannot be a bird—this is a logical truth, not a probability
+- Simpler, no extra hyperparameters to tune
+- Prevents the model from "hedging" with invalid combinations
+
+---
+
+## 5. Training Strategy
+
+### 5.1 Transfer Learning: Progressive Unfreezing
+
+**The approach:**
+- **Phase 1 (Epochs 1-5):** Freeze all pretrained layers (layer1-4), only train new conv1 + classification heads
+  - Why: New conv1 is random—needs to learn to produce features compatible with frozen layer1
+  - Learning rate: 1e-3 (higher, since we're training from scratch)
+
+- **Phase 2 (Epochs 6-15):** Freeze layer1-2, unfreeze layer3-4 + keep training conv1 + heads
+  - Why: Deeper layers need to adapt to 64×64 features and our specific classes
+  - Learning rate: 1e-4 (lower, fine-tuning pretrained weights)
+
+- **Phase 3 (Epochs 16-25):** Unfreeze everything, full end-to-end training
+  - Why: Final polish, let early layers adjust if needed
+  - Learning rate: 1e-5 (very low, avoid breaking learned features)
+
+**Why progressive vs freezing nothing:**
+- Freezing nothing from start → pretrained weights get corrupted by random conv1 gradients
+- Freezing everything → can't adapt to our specific task
+- Progressive = best of both worlds: stability first, then adaptation
+
+### 5.2 Loss Function: Multi-Task + Outlier Exposure
+
+**For images from known classes:**
+- Standard cross-entropy on both heads (with label smoothing = 0.1)
+- Center loss: Pull embeddings of same class together (weight = 0.001)
+  - Why: Creates tight clusters in feature space, leaving "empty space" for novel classes to fall into
+
+**For images from held-out classes (outlier exposure):**
+- Push the model to predict "Novel" explicitly
+- Loss = CrossEntropy(output, novel_class_index)
+- This trains α and β in the virtual logit to activate on unfamiliar patterns
+
+**OE Mixing Schedule:**
+- **Batch ratio:** For every 4 batches from Train-Seen, sample 1 batch from OE pool
+  - Example: In a training epoch, if we have 71 batches of Train-Seen (4575 images / 64 per batch), we add ~18 OE batches
+  - Effective ratio: ~20% of training batches are OE
+- **Loss weighting:** L_total = L_seen + λ_oe × L_oe, where λ_oe = 0.5
+  - This balances: OE contributes but doesn't dominate
+- **Monitoring:** Track Train-Seen accuracy separately from overall training accuracy
+  - If Train-Seen accuracy drops below 95%, reduce λ_oe to 0.3 or reduce OE batch frequency to 1-in-5
+- **Alternative (simpler):** Mix OE images into regular batches (80% seen, 20% OE per batch)
+  - Choose based on dataloader complexity vs flexibility
+
+**Why this ratio:**
+- Too much OE (50%+) → model forgets how to classify seen classes
+- Too little OE (<10%) → insufficient signal for novelty learning
+- 20% is a proven sweet spot in outlier exposure literature
+
+**Why label smoothing:**
+- Forces the model to predict 0.9 instead of 1.0 for the correct class
+- Leaves "probability room" for novel detection (model isn't forced to be 100% certain)
+- Directly improves cross-entropy scores (less penalty for near-misses)
+
+### 5.3 Data Augmentation
+
+**The strategy:**
+- RandomResizedCrop, RandomHorizontalFlip, ColorJitter (standard augmentations)
+- RandAugment with n=2 operations, magnitude=9 **(with fallback to m=7)**
+  - Why: 6.6k images is small—need augmentation to prevent overfitting
+  - Why n=2, m=9: Conservative for 64×64 (too aggressive destroys small details)
+
+**Augmentation Risk & Fallback:**
+- **Risk:** RandAugment m=9 on 64×64 can erase fine-grained textures (scales, feather patterns, fur)
+  - Especially harmful for rare classes (mud turtle, specific bird species)
+- **Monitoring:** After 5 epochs, check per-class accuracy on Val-Seen
+  - If any class with <50 training images has <40% val accuracy, augmentation may be too strong
+- **Fallback:** Reduce to m=7 (gentler augmentation) or disable RandAugment for classes with <50 images
+- **Alternative:** Use different augmentation strength based on class size
+  - Large classes (>100 images): m=9
+  - Small classes (<50 images): m=5 or standard augmentation only
+
+**Why this matters:**
+- Competition warns: "test distribution may differ from training"
+- Augmentation simulates lighting changes, crops, color shifts
+- Improves generalization to novel viewpoints of both seen and unseen classes
+- BUT over-augmentation destroys the signal we need for fine-grained classification
+
+### 5.4 Class Imbalance
+
+**The problem:**
+- Dogs might have 200 images per breed, reptiles might have 30
+- Model will bias toward common classes
+
+**The solution:**
+- WeightedRandomSampler: Oversample rare classes, undersample common ones
+- Each batch has approximately equal representation of all classes
+
+**Why this beats class-weighted loss:**
+- Sampler ensures the model actually sees rare classes frequently (not just weights their loss higher)
+- More stable training (loss doesn't spike from rare class batches)
+
+---
+
+## 6. Validation & Calibration
+
+### 6.1 Data Splitting for Validation
+
+**Exact Split Strategy (Preventing Data Leakage):**
+
+Assume ~6,600 total images across ~35 sub-classes (estimate based on competition description).
+
+**Step 1: Identify and Reserve "Unseen" Sub-classes for Validation**
+- Select 2-3 complete sub-classes (one per super-class ideally)
+- Example candidates: Beagle (Dog), Parrot (Bird), Gecko (Reptile)
+- Criteria: Choose classes with ≥80 images each (ensures robust validation)
+- **Unseen-Val bucket:** ~240-300 images (8-10% of total)
+- **Critical:** These classes NEVER appear in training, OE, or seen-validation
+
+**Step 2: Reserve "Outlier Exposure" Sub-classes**
+- From remaining ~32 sub-classes, select 2-3 different complete sub-classes
+- Example: Pug (Dog), Rooster (Bird), Mud Turtle (Reptile)
+- **OE bucket:** ~200-250 images (6-8% of total)
+- **Critical:** These appear ONLY in OE batches during training, never in standard training or validation
+
+**Step 3: Split Remaining "Seen" Sub-classes (~29 classes, ~6,100 images)**
+- **Train-Seen:** 75% of remaining → ~4,575 images
+- **Val-Seen:** 25% of remaining → ~1,525 images
+
+**Final Buckets:**
+```
+Train-Seen:    4,575 images  (29 sub-classes, for supervised learning)
+Val-Seen:      1,525 images  (29 sub-classes, for hyperparameter tuning)
+OE:              225 images  (2-3 sub-classes, for outlier exposure during training)
+Unseen-Val:      275 images  (2-3 sub-classes, for novelty detection validation)
+Total:         6,600 images
+```
+
+**Data Leakage Prevention Checklist:**
+- [ ] Unseen-Val classes appear in exactly one bucket (Unseen-Val only)
+- [ ] OE classes appear in exactly one bucket (OE only)
+- [ ] Seen classes are split between Train-Seen and Val-Seen only
+- [ ] No class appears in both OE and Unseen-Val
+- [ ] No rare class (<30 images) is selected for OE or Unseen-Val
+
+**Rare Class Protection:**
+- Before finalizing buckets, check: Does any Train-Seen class have <30 images?
+- If yes: Either (a) don't select that class for OE/Unseen-Val, or (b) group it with related classes
+- This ensures WeightedRandomSampler has enough examples to oversample
+
+**Why this exact structure:**
+- Unseen-Val is completely held out → unbiased novelty evaluation
+- OE classes are separate from Unseen-Val → prevents the model from memorizing what "novel" looks like
+- 75/25 train/val split on seen classes → standard proportion for hyperparameter tuning
+- Total holdout (~500 images) is ~8% → balances novelty training vs main task data
+
+### 6.2 Threshold Tuning
+
+**The process:**
+- Run inference on Val-Seen ∪ Unseen-Val (both sets)
+- Try different thresholds for P(Novel): 0.3, 0.4, 0.5, 0.6, 0.7, 0.8
+- Compute F1 score for novel detection at each threshold
+- Choose the threshold that maximizes F1 (balances precision and recall)
+
+**Exact tuning algorithm:**
+```
+For θ in [0.3, 0.35, 0.4, ..., 0.8]:
+    # Apply threshold to all validation images
+    For each image in (Val-Seen ∪ Unseen-Val):
+        If P(Novel) > θ:
+            Predict: Novel
+        Else:
+            Predict: argmax(P[known classes])
+
+    # Compute metrics
+    TP = # Unseen-Val images correctly flagged as Novel
+    FP = # Val-Seen images incorrectly flagged as Novel
+    FN = # Unseen-Val images classified as known class
+
+    Precision = TP / (TP + FP)
+    Recall = TP / (TP + FN)
+    F1 = 2 × Precision × Recall / (Precision + Recall)
+
+θ_optimal = argmax(F1)
+```
+
+**Why tune separately for super-class vs sub-class:**
+- Super-class is easier (3 categories vs 30+ sub-classes)
+- Can be more confident about super-class → lower threshold (e.g., θ_super = 0.5)
+- Need more certainty for sub-class → higher threshold (e.g., θ_sub = 0.6)
+
+**Saving thresholds with checkpoint:**
+- After tuning, save: `checkpoint = {model_state, optimizer_state, θ_super, θ_sub, T_calibrated}`
+- At inference, load these exact thresholds (don't re-tune on test set)
+
+### 6.3 Temperature Scaling
+
+**The final step (after training):**
+- Add a learnable temperature T (initialized to 1.0)
+- On Val-Seen set, optimize: P_calibrated = softmax(logits_full / T)
+  - **Critical:** Apply temperature to the FULL logit vector including the virtual novel logit
+  - This ensures the entire distribution (Bird, Dog, Reptile, Novel) is calibrated, not just the known classes
+- Choose T that minimizes cross-entropy loss on Val-Seen
+
+**Exact procedure:**
+```
+1. Freeze all model parameters (including α, β)
+2. For T in [0.5, 0.6, ..., 2.5] (grid search):
+     Compute: probs = softmax([z_bird, z_dog, z_reptile, α - β×E] / T)
+     Evaluate: CE_loss on Val-Seen
+3. Select: T* = argmin(CE_loss)
+4. At inference: Always divide logits by T* before softmax
+```
+
+**Why include the novel logit:**
+- If we only scale [z_bird, z_dog, z_reptile], the novel logit remains unscaled → distribution is distorted
+- Temperature must apply to ALL logits to maintain valid probability distribution
+- This ensures P(Novel) is also calibrated (important for cross-entropy on unseen classes)
+
+**Why this matters:**
+- Even with label smoothing, model may be poorly calibrated
+- Temperature scaling is post-hoc (doesn't change accuracy, only probabilities)
+- Directly optimizes the competition metric (cross-entropy)
+
+**Expected result:**
+- T* ≈ 1.2 to 1.5 (makes model less overconfident)
+- Cross-entropy improves by 10-20% on Val-Seen
+- Should also improve cross-entropy on Unseen-Val (via better-calibrated P(Novel))
+
+---
+
+## 7. Experimental Strategy
+
+**We need multiple model versions for analysis (grading requirement).**
+
+### Baseline Models:
+1. **Closed-Set (no novelty):** Upper bound on seen accuracy, shows degradation on unseen
+2. **Energy threshold (post-hoc):** Tests if simple thresholding works without training
+3. **Virtual Logit only:** Tests if learnable threshold self-calibrates without outlier exposure
+4. **Virtual Logit + Outlier Exposure (PRIMARY):** Full pipeline, expected best performance
+
+### Ablation Studies:
+Test each component's contribution:
+- Remove transfer learning → train from scratch
+- Remove augmentation → standard resize only
+- Remove outlier exposure → no novelty training
+- Remove center loss → no cluster tightening
+- Remove hierarchical masking → allow contradictory predictions
+
+**Why this matters:**
+- Shows which components are critical vs nice-to-have
+- Provides insights for the analysis report (grading is on understanding, not just leaderboard rank)
+- If something fails, ablations tell us what to debug
+
+---
+
+## 8. Implementation Roadmap
+
+### Step 1: Data Pipeline (Week 1)
+- Download dataset, parse folder structure into class labels
+- Create hierarchy mapping (which sub-classes belong to which super-class)
+- Split into train/validation/outlier-exposure sets (following Section 6.1 exact buckets)
+- Implement augmentation pipeline
+- **Implement detailed metrics instrumentation early:**
+  - Per-class accuracy (for each of the 29 seen sub-classes)
+  - Seen vs Unseen accuracy breakdown (super and sub separately)
+  - Confusion matrix for novel detection (TP/FP/TN/FN)
+  - Log these to TensorBoard/WandB every epoch
+  - Why: Makes OE tuning and ablations much faster to interpret
+- Verify: Can we load a batch and visualize it?
+
+### Step 2: Model Architecture (Week 1)
+- Load ResNet-50, modify conv1, load pretrained weights
+- Implement dual heads (super-class, sub-class)
+- Add virtual logit computation (α, β as learnable parameters)
+- Verify: Forward pass produces correct output shapes, gradients flow
+
+### Step 3: Training Loop (Week 2)
+- Implement multi-task loss (CE + center loss)
+- Implement outlier exposure loss
+- Implement progressive unfreezing schedule
+- Train baseline closed-set model (no novelty detection)
+- Verify: Model achieves >95% accuracy on seen classes
+
+### Step 4: Novelty Detection (Week 2)
+- Integrate virtual logit into training
+- Add outlier exposure batches (10% of data)
+- Train full model (virtual logit + OE)
+- Verify: Model outputs reasonable P(Novel) on validation unseen
+
+### Step 5: Inference & Tuning (Week 3)
+- Implement hierarchical masking logic
+- Tune novelty thresholds on validation set
+- Apply temperature scaling
+- Verify: Predictions are logically consistent, cross-entropy is competitive
+
+### Step 6: Experiments & Analysis (Week 3-4)
+- Run all baseline models and ablations
+- Generate confusion matrices, error analysis
+- Compare on competition metrics
+- Write analysis report
+
+### Step 7: Final Submission (Week 4)
+- Download test set
+- Generate predictions with best model
+- Submit to leaderboard
+- Iterate if needed
+
+---
+
+## 9. Expected Performance
+
+**Baseline (CLIP):**
+- Super-class accuracy: 80% overall, 99% seen, 33% unseen
+- Sub-class accuracy: 13% overall, 61% seen, 0.24% unseen
+- Cross-entropy: 1.36 super, 4.44 sub
+
+**Our targets (conservative estimates):**
+- Super-class accuracy: 85% overall, 98% seen, 55% unseen
+- Sub-class accuracy: 30% overall, 72% seen, 8% unseen
+- Cross-entropy: <1.0 super, <3.5 sub
+
+**Where we expect improvement:**
+- Unseen super-class: +22 points (33% → 55%) from outlier exposure training
+- Unseen sub-class: +7.76 points (0.24% → 8%) from better generalization, though still very hard
+- Cross-entropy: -0.36 super, -0.94 sub from label smoothing + temperature scaling + calibrated novel probabilities
+
+**Key insight:**
+- We're not trying to beat CLIP on seen classes (99% is already near-perfect)
+- Focus is on novel detection (where CLIP has 33% super, 0.24% sub)
+- Even getting to 50% super, 5% sub on unseen would be a major win
+
+---
+
+## 10. Risk Mitigation
+
+**Risk: Outlier exposure hurts seen accuracy**
+- Monitor: If seen accuracy drops below 95%
+- Fix: Reduce outlier exposure weight or percentage of OE batches
+
+**Risk: Virtual logit doesn't calibrate (α, β stuck)**
+- Monitor: If P(Novel) is always near 0 or always near 1
+- Fix: Initialize α with validation grid search, or fix β=1.0 and only learn α
+
+**Risk: Too little data for rare classes after splitting**
+- Monitor: If any class has <30 training images
+- Fix: Increase augmentation intensity for those classes, or group rare classes
+
+**Risk: Model overfits to 6.6k images**
+- Monitor: If validation accuracy is >10 points below training accuracy
+- Fix: Increase augmentation (higher RandAugment magnitude), add dropout to heads
+
+**Risk: Cross-entropy is good but accuracy is bad (or vice versa)**
+- This is a calibration issue
+- Fix: Adjust temperature scaling more aggressively, or revisit label smoothing value
+
+---
+
+## 11. Success Criteria
+
+**Minimum (must achieve):**
+- Seen super-class accuracy >95%
+- Seen sub-class accuracy >65%
+- Unseen super-class accuracy >40% (vs baseline 33%)
+- Model outputs valid probability distributions (sums to 1.0)
+
+**Target (competitive):**
+- Beat baseline on all metrics
+- Unseen super-class accuracy >50%
+- Unseen sub-class accuracy >5% (vs baseline 0.24%)
+- Complete experimental analysis with 4+ model variants
+
+**Stretch (top 10%):**
+- Unseen super-class accuracy >60%
+- Unseen sub-class accuracy >10%
+- Cross-entropy <0.8 super, <3.0 sub
+- Novel insights from ablation studies publishable as a technical report
+
+---
+
+## 12. Key Takeaways
+
+**Why this approach beats the baseline:**
+1. **Better backbone for 64×64:** Modified ResNet preserves spatial details vs CLIP's fixed architecture
+2. **Supervised learning:** We fine-tune on training data vs CLIP's zero-shot (no adaptation)
+3. **Explicit novelty training:** Outlier exposure teaches "I don't know" vs CLIP just thresholding confidence
+4. **Calibrated probabilities:** Virtual logit outputs valid P(Novel) vs post-hoc binary decision
+5. **Hierarchical constraints:** Enforce logical consistency vs independent predictions
+
+**The core innovation:**
+- Virtual logit transforms novelty detection from a post-hoc threshold into a trainable, differentiable component
+- Outlier exposure provides the training signal that's missing from standard supervised learning
+- Together, they solve the "predict probability of unknown" problem
+
+**The biggest challenges:**
+- Sub-class novel detection is fundamentally hard (40 sub-classes, fine-grained differences)
+- Limited data (6.6k images) requires careful regularization
+- Balancing seen vs unseen performance (can't sacrifice one for the other)
+
+**If we had more time:**
+- Experiment with Mahalanobis distance (alternative to energy-based virtual logit)
+- Try ensemble of multiple models (voting for robustness)
+- Use external data for outlier exposure (OpenImages, ImageNet-21k filtered for "not bird/dog/reptile")
+- Implement uncertainty-aware test-time augmentation
+
+---
+
+## Final Note
+
+This plan prioritizes understanding over complexity. Every component has a clear justification. If something isn't working, the ablation studies will tell us what to cut. The goal is a model that's competitive on the leaderboard AND demonstrates deep understanding of open-set recognition for the grading rubric.
