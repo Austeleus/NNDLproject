@@ -1,0 +1,29 @@
+{
+  "val_seen": {
+    "super_acc": 78.01788449287415,
+    "sub_acc": 69.89567875862122,
+    "super_ce": 0.05629218690619206,
+    "sub_ce": 0.323247332864298,
+    "novel_super_f1": 0.0,
+    "novel_sub_f1": 0.0,
+    "total_samples": 1342
+  },
+  "val_unseen": {
+    "super_acc": 46.64246737957001,
+    "sub_acc": 52.63158082962036,
+    "super_ce": 3.287549055206797,
+    "sub_ce": 5.110552336040296,
+    "novel_super_f1": 0.0036231884057971015,
+    "novel_sub_f1": 0.07678883071553229,
+    "total_samples": 551
+  },
+  "overall": {
+    "super_acc": 68.88536741446391,
+    "sub_acc": 64.87057682577417
+  },
+  "calibration": {
+    "temperature": 0.699999988079071,
+    "threshold_super": 0.009999999776482582,
+    "threshold_sub": 0.009999999776482582
+  }
+}

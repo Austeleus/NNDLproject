@@ -9,7 +9,12 @@ runs/
 logs/
 reports/figures/
 checkpoints/
+experiments/
+wandb/
+
+# Generated files
+submission_*.csv
 
 # Data (avoid committing raw datasets)
-data/
-project_data/
+/data/
+/project_data/

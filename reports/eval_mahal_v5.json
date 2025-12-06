@@ -1,0 +1,28 @@
+{
+  "val_seen": {
+    "super_acc": 0.0,
+    "sub_acc": 0.0,
+    "novel_super_recall": null,
+    "novel_sub_recall": null,
+    "super_novel_fp": 1342,
+    "sub_novel_fp": 1342,
+    "total_samples": 1342
+  },
+  "val_unseen": {
+    "super_acc": 100.0,
+    "sub_acc": 100.0,
+    "novel_super_recall": 1.0,
+    "novel_sub_recall": 1.0,
+    "super_novel_fp": null,
+    "sub_novel_fp": null,
+    "total_samples": 551
+  },
+  "overall": {
+    "super_acc": 29.107237189646064,
+    "sub_acc": 29.107237189646064
+  },
+  "mahalanobis": {
+    "threshold_super": 1.0,
+    "threshold_sub": 30.0
+  }
+}
