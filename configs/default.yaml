@@ -36,39 +36,42 @@ model:
   pretrained: true
   num_superclasses: 3
   num_subclasses: 87
-  cosine_scale: 16.0
+  cosine_scale: 8.0
   virtual_logit_alpha_init: 0.0
   virtual_logit_beta_init: 3.0
   virtual_logit_clamp: 15.0
   dropout: 0.5
 
 training:
-  epochs: 30
+  epochs: 35
   optimizer: adamw
   lr: 0.001
   weight_decay: 0.05
   scheduler: cosine
   warmup_epochs: 3
   min_lr: 0.000001
-  phase1_epochs: 5
+  phase1_epochs: 10
   phase2_epochs: 15
   phase3_epochs: 10
   phase1_lr: 0.001
   phase2_lr: 0.0001
   phase3_lr: 0.00001
   grad_clip: 1.0
-  early_stopping_patience: 12
+  early_stopping_patience: 25
   seed: 42
 
 loss:
-  label_smoothing: 0.1
+  label_smoothing: 0.2
   lambda_super: 1.0
   lambda_sub: 1.0
   lambda_oe: 2.0
   oe_batch_ratio: 0.25
-  use_margin_loss: true
+  use_margin_loss: false
   margin: 3.0
   lambda_margin: 1.0
+  use_energy_margin: false
+  energy_margin: 3.0
+  lambda_energy_margin: 0.5
 
 inference:
   temperature: 1.0
@@ -76,7 +79,7 @@ inference:
   temperature_search_steps: 21
   threshold_super: 0.5
   threshold_sub: 0.5
-  threshold_search_range: [0.01, 0.9]
+  threshold_search_range: [0.1, 0.8]
   threshold_search_steps: 41
   use_msp: true
   msp_threshold_sub: 0.5

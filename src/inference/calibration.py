@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,17 @@ class CalibrationResult:
     novel_f1_sub: float
     use_hybrid: bool = True
     hybrid_weights: Tuple[float, float, float] = (0.4, 0.3, 0.3)
+
+
+@dataclass
+class PerHeadCalibration:
+    """Calibration results for decoupled classifier with per-head thresholds."""
+    temperature_super: float = 1.0
+    temperatures_sub: Dict[int, float] = field(default_factory=dict)
+    threshold_novelty_super: float = 0.5
+    thresholds_novelty_sub: Dict[int, float] = field(default_factory=dict)
+    msp_threshold_super: float = 0.5
+    msp_thresholds_sub: Dict[int, float] = field(default_factory=dict)
 
 
 class TemperatureScaler:
@@ -272,6 +283,8 @@ def calibrate_model(
 
     return CalibrationResult(
         temperature=temperature,
+        temperature_super=temperature,
+        temperature_sub=temperature,
         threshold_super=thresh_super,
         threshold_sub=thresh_sub,
         val_ce_super=total_super_ce / total_count,
@@ -279,3 +292,224 @@ def calibrate_model(
         novel_f1_super=0.0,
         novel_f1_sub=0.0,
     )
+
+
+def calibrate_decoupled_model(
+    model,
+    seen_loader: DataLoader,
+    unseen_loader: DataLoader,
+    config: InferenceConfig,
+    device: torch.device,
+    num_superclasses: int = 3,
+) -> PerHeadCalibration:
+    """
+    Calibrate decoupled model with per-head temperatures and thresholds.
+    """
+    from ..models import DecoupledClassifier
+
+    model.eval()
+    calibration = PerHeadCalibration()
+
+    super_logits_seen = []
+    super_targets_seen = []
+    per_head_logits_seen = {i: [] for i in range(num_superclasses)}
+    per_head_targets_seen = {i: [] for i in range(num_superclasses)}
+
+    super_novelty_scores_seen = []
+    super_novelty_scores_unseen = []
+    per_head_novelty_seen = {i: [] for i in range(num_superclasses)}
+    per_head_novelty_unseen = {i: [] for i in range(num_superclasses)}
+
+    super_msp_seen = []
+    super_msp_unseen = []
+    per_head_msp_seen = {i: [] for i in range(num_superclasses)}
+    per_head_msp_unseen = {i: [] for i in range(num_superclasses)}
+
+    with torch.no_grad():
+        for batch in seen_loader:
+            images = batch["image"].to(device)
+            super_targets = batch["superclass"].to(device)
+            sub_targets = batch["subclass"].to(device)
+
+            output = model(images, super_targets=super_targets)
+
+            super_logits_seen.append(output.super_logits.cpu())
+            super_targets_seen.append(super_targets.cpu())
+
+            super_probs = F.softmax(output.super_logits, dim=1)
+            super_msp_seen.append(super_probs.max(dim=1).values.cpu())
+
+            if output.super_novelty_score is not None:
+                super_novelty_scores_seen.append(output.super_novelty_score.cpu())
+
+            for super_idx in range(num_superclasses):
+                mask = super_targets == super_idx
+                if mask.any() and output.per_head_sub_logits is not None:
+                    local_logits = output.per_head_sub_logits.get(super_idx)
+                    if local_logits is not None:
+                        per_head_logits_seen[super_idx].append(local_logits.cpu())
+
+                        local_probs = F.softmax(local_logits, dim=1)
+                        per_head_msp_seen[super_idx].append(local_probs.max(dim=1).values.cpu())
+
+                        if output.sub_novelty_scores is not None:
+                            score_data = output.sub_novelty_scores.get(super_idx)
+                            if score_data is not None:
+                                _, scores = score_data
+                                per_head_novelty_seen[super_idx].append(scores.cpu())
+
+        for batch in unseen_loader:
+            images = batch["image"].to(device)
+
+            output = model(images)
+
+            super_probs = F.softmax(output.super_logits, dim=1)
+            super_msp_unseen.append(super_probs.max(dim=1).values.cpu())
+
+            if output.super_novelty_score is not None:
+                super_novelty_scores_unseen.append(output.super_novelty_score.cpu())
+
+            super_preds = output.super_logits.argmax(dim=1)
+            for super_idx in range(num_superclasses):
+                mask = super_preds == super_idx
+                if mask.any() and output.per_head_sub_logits is not None:
+                    local_logits = output.per_head_sub_logits.get(super_idx)
+                    if local_logits is not None:
+                        local_probs = F.softmax(local_logits, dim=1)
+                        per_head_msp_unseen[super_idx].append(local_probs.max(dim=1).values.cpu())
+
+                        if output.sub_novelty_scores is not None:
+                            score_data = output.sub_novelty_scores.get(super_idx)
+                            if score_data is not None:
+                                _, scores = score_data
+                                per_head_novelty_unseen[super_idx].append(scores.cpu())
+
+    super_logits = torch.cat(super_logits_seen)
+    super_targets = torch.cat(super_targets_seen)
+
+    t_min, t_max = config.temperature_search_range
+    temperatures = torch.linspace(t_min, t_max, config.temperature_search_steps)
+
+    best_temp = 1.0
+    best_ce = float("inf")
+    for t in temperatures:
+        ce = F.cross_entropy(super_logits / t, super_targets).item()
+        if ce < best_ce:
+            best_ce = ce
+            best_temp = t.item()
+    calibration.temperature_super = best_temp
+
+    for super_idx in range(num_superclasses):
+        if per_head_logits_seen[super_idx]:
+            logits = torch.cat(per_head_logits_seen[super_idx])
+            best_temp = 1.0
+            best_ce = float("inf")
+            for t in temperatures:
+                probs = F.softmax(logits / t, dim=1)
+                ce = -(probs.max(dim=1).values.log().mean()).item()
+                if ce < best_ce:
+                    best_ce = ce
+                    best_temp = t.item()
+            calibration.temperatures_sub[super_idx] = best_temp
+        else:
+            calibration.temperatures_sub[super_idx] = 1.0
+
+    if super_msp_seen and super_msp_unseen:
+        seen_msp = torch.cat(super_msp_seen)
+        unseen_msp = torch.cat(super_msp_unseen)
+
+        thresholds = torch.linspace(0.3, 0.9, 61)
+        best_thresh = 0.5
+        best_f1 = 0.0
+
+        for thresh in thresholds:
+            tp = (unseen_msp < thresh).sum().item()
+            fp = (seen_msp < thresh).sum().item()
+            fn = (unseen_msp >= thresh).sum().item()
+
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thresh = thresh.item()
+
+        calibration.msp_threshold_super = best_thresh
+
+    for super_idx in range(num_superclasses):
+        if per_head_msp_seen[super_idx] and per_head_msp_unseen[super_idx]:
+            seen_msp = torch.cat(per_head_msp_seen[super_idx])
+            unseen_msp = torch.cat(per_head_msp_unseen[super_idx])
+
+            thresholds = torch.linspace(0.3, 0.9, 61)
+            best_thresh = 0.5
+            best_f1 = 0.0
+
+            for thresh in thresholds:
+                tp = (unseen_msp < thresh).sum().item()
+                fp = (seen_msp < thresh).sum().item()
+                fn = (unseen_msp >= thresh).sum().item()
+
+                precision = tp / max(tp + fp, 1)
+                recall = tp / max(tp + fn, 1)
+                f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_thresh = thresh.item()
+
+            calibration.msp_thresholds_sub[super_idx] = best_thresh
+        else:
+            calibration.msp_thresholds_sub[super_idx] = 0.5
+
+    if super_novelty_scores_seen and super_novelty_scores_unseen:
+        seen_scores = torch.cat(super_novelty_scores_seen)
+        unseen_scores = torch.cat(super_novelty_scores_unseen)
+
+        thresholds = torch.linspace(-5, 5, 101)
+        best_thresh = 0.0
+        best_f1 = 0.0
+
+        for thresh in thresholds:
+            tp = (unseen_scores > thresh).sum().item()
+            fp = (seen_scores > thresh).sum().item()
+            fn = (unseen_scores <= thresh).sum().item()
+
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thresh = thresh.item()
+
+        calibration.threshold_novelty_super = best_thresh
+
+    for super_idx in range(num_superclasses):
+        if per_head_novelty_seen[super_idx] and per_head_novelty_unseen[super_idx]:
+            seen_scores = torch.cat(per_head_novelty_seen[super_idx])
+            unseen_scores = torch.cat(per_head_novelty_unseen[super_idx])
+
+            thresholds = torch.linspace(-5, 5, 101)
+            best_thresh = 0.0
+            best_f1 = 0.0
+
+            for thresh in thresholds:
+                tp = (unseen_scores > thresh).sum().item()
+                fp = (seen_scores > thresh).sum().item()
+                fn = (unseen_scores <= thresh).sum().item()
+
+                precision = tp / max(tp + fp, 1)
+                recall = tp / max(tp + fn, 1)
+                f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_thresh = thresh.item()
+
+            calibration.thresholds_novelty_sub[super_idx] = best_thresh
+        else:
+            calibration.thresholds_novelty_sub[super_idx] = 0.0
+
+    return calibration

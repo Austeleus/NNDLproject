@@ -17,8 +17,9 @@ class LabelSmoothingCrossEntropy(nn.Module):
         num_valid = valid_mask.sum(dim=-1, keepdim=True).float()
 
         # Replace -inf with very negative number for softmax stability
+        # Use -65000 instead of -1e9 to be compatible with half precision
         safe_logits = logits.clone()
-        safe_logits[~valid_mask] = -1e9
+        safe_logits[~valid_mask] = -65000.0
 
         log_probs = F.log_softmax(safe_logits, dim=-1)
 
