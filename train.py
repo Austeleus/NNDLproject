@@ -164,7 +164,8 @@ def main():
     print(f"  OE batches: {len(loaders.oe)}")
 
     print("\nCreating model...")
-    model = create_model(config.model)
+    subclasses_per_super = get_subclasses_by_superclass(config.data.data_dir)
+    model = create_model(config.model, subclasses_per_super=subclasses_per_super)
     params = model.count_parameters()
     print(f"  Total parameters: {params['total']:,}")
     print(f"  Backbone: {params['backbone']:,}")

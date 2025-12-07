@@ -108,7 +108,10 @@ class Trainer:
             val_seen_metrics = self._validate(self.dataloaders.val_seen, "val_seen")
             val_unseen_metrics = self._validate(self.dataloaders.val_unseen, "val_unseen", is_unseen=True)
 
-            combined_acc = (val_seen_metrics.super_acc + val_unseen_metrics.super_acc) / 2
+            combined_acc = (
+                val_seen_metrics.super_acc + val_unseen_metrics.super_acc +
+                val_seen_metrics.sub_acc + val_unseen_metrics.sub_acc
+            ) / 4
 
             if self.logger:
                 self.logger.log_epoch(
@@ -124,7 +127,9 @@ class Trainer:
             print(
                 f"Epoch {epoch}: "
                 f"Train Super={train_metrics.super_acc:.1f}%, Sub={train_metrics.sub_acc:.1f}% | "
-                f"Val Seen Super={val_seen_metrics.super_acc:.1f}%, Unseen={val_unseen_metrics.super_acc:.1f}%"
+                f"Val Seen={val_seen_metrics.super_acc:.1f}%/{val_seen_metrics.sub_acc:.1f}%, "
+                f"Unseen={val_unseen_metrics.super_acc:.1f}%/{val_unseen_metrics.sub_acc:.1f}% | "
+                f"Combined={combined_acc:.1f}%"
             )
 
             if combined_acc > self.state.best_val_acc:
@@ -193,11 +198,13 @@ class Trainer:
         lam = 1.0
         super_targets_b = super_targets
         sub_targets_b = sub_targets
+        is_oe_b = is_oe
 
         if use_mixup_this_step:
-            images, super_targets, super_targets_b, sub_targets, sub_targets_b, lam = mixup_data(
+            images, super_targets, super_targets_b, sub_targets, sub_targets_b, lam, mix_index = mixup_data(
                 images, super_targets, sub_targets, self.mixup_alpha
             )
+            is_oe_b = is_oe[mix_index]
 
         self.optimizer.zero_grad()
 
@@ -206,7 +213,7 @@ class Trainer:
                 output = self.model(images)
                 if use_mixup_this_step:
                     loss_out_a = self.loss_fn(output, super_targets, sub_targets, is_oe)
-                    loss_out_b = self.loss_fn(output, super_targets_b, sub_targets_b, is_oe)
+                    loss_out_b = self.loss_fn(output, super_targets_b, sub_targets_b, is_oe_b)
                     total_loss = lam * loss_out_a.total + (1 - lam) * loss_out_b.total
                 else:
                     loss_out = self.loss_fn(output, super_targets, sub_targets, is_oe)
@@ -227,7 +234,7 @@ class Trainer:
             output = self.model(images)
             if use_mixup_this_step:
                 loss_out_a = self.loss_fn(output, super_targets, sub_targets, is_oe)
-                loss_out_b = self.loss_fn(output, super_targets_b, sub_targets_b, is_oe)
+                loss_out_b = self.loss_fn(output, super_targets_b, sub_targets_b, is_oe_b)
                 total_loss = lam * loss_out_a.total + (1 - lam) * loss_out_b.total
             else:
                 loss_out = self.loss_fn(output, super_targets, sub_targets, is_oe)

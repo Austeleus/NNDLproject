@@ -151,5 +151,8 @@ class HierarchicalClassifier(nn.Module):
         }
 
 
-def create_model(config: ModelConfig) -> HierarchicalClassifier:
-    return HierarchicalClassifier(config)
+def create_model(
+    config: ModelConfig,
+    subclasses_per_super: Optional[Dict[int, List[int]]] = None,
+) -> HierarchicalClassifier:
+    return HierarchicalClassifier(config, subclasses_per_super=subclasses_per_super)

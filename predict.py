@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from src.config import Config
 from src.data import create_test_dataloader, load_class_mappings
+from src.data.dataset import get_subclasses_by_superclass
 from src.models import create_model
 from src.inference import HierarchicalPredictor, MSPPredictor, CalibrationResult
 

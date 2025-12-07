@@ -12,7 +12,7 @@ def mixup_data(
     y_super: torch.Tensor,
     y_sub: torch.Tensor,
     alpha: float = 0.2,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, torch.Tensor]:
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
     else:
@@ -25,7 +25,7 @@ def mixup_data(
     y_super_a, y_super_b = y_super, y_super[index]
     y_sub_a, y_sub_b = y_sub, y_sub[index]
 
-    return mixed_x, y_super_a, y_super_b, y_sub_a, y_sub_b, lam
+    return mixed_x, y_super_a, y_super_b, y_sub_a, y_sub_b, lam, index
 
 
 def mixup_criterion(

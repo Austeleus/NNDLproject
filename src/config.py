@@ -121,6 +121,10 @@ class LossConfig:
     margin: float = 2.0
     lambda_margin: float = 0.5
 
+    use_energy_margin: bool = False
+    energy_margin: float = 3.0
+    lambda_energy_margin: float = 0.5
+
 
 @dataclass
 class InferenceConfig:

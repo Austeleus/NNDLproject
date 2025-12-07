@@ -164,7 +164,8 @@ def main():
     print(f"Device: {device}")
 
     print("\nLoading model...")
-    model = create_model(config.model)
+    subclasses_per_super = get_subclasses_by_superclass(config.data.data_dir)
+    model = create_model(config.model, subclasses_per_super=subclasses_per_super)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
@@ -195,6 +196,8 @@ def main():
         cal_data = torch.load(args.calibration)
         calibration = CalibrationResult(
             temperature=cal_data["temperature"],
+            temperature_super=cal_data.get("temperature_super", cal_data["temperature"]),
+            temperature_sub=cal_data.get("temperature_sub", cal_data["temperature"]),
             threshold_super=cal_data["threshold_super"],
             threshold_sub=cal_data["threshold_sub"],
             val_ce_super=0.0,

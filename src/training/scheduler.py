@@ -50,11 +50,13 @@ class ProgressiveUnfreezeScheduler:
         ))
 
         # Phase 2: Add layer3-4 (group 2) for deeper adaptation
+        # Freeze virtual logit to preserve novel detection learned in phase 1
         phases.append(UnfreezePhase(
             start_epoch=phase1_end,
             end_epoch=phase2_end,
             unfreeze_groups=[0, 1, 2, 3],
             lr=c.phase2_lr,
+            freeze_virtual_logit=True,
         ))
 
         # Phase 3: Full fine-tuning with lower LR

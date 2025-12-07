@@ -171,6 +171,13 @@ class HierarchicalLoss(nn.Module):
             self.margin_loss_super = MarginSeparationLoss(margin=margin, num_known_classes=num_superclasses)
         self.lambda_margin = lambda_margin
 
+        self.use_energy_margin = getattr(config, 'use_energy_margin', False)
+        if self.use_energy_margin:
+            energy_margin = getattr(config, 'energy_margin', 3.0)
+            self.energy_margin_loss_sub = EnergyMarginLoss(margin=energy_margin)
+            self.energy_margin_loss_super = EnergyMarginLoss(margin=energy_margin)
+        self.lambda_energy_margin = getattr(config, 'lambda_energy_margin', 0.5)
+
         self.lambda_super = config.lambda_super
         self.lambda_sub = config.lambda_sub
         self.lambda_oe = config.lambda_oe
@@ -220,6 +227,12 @@ class HierarchicalLoss(nn.Module):
                 margin_loss_super = self.margin_loss_super(model_output.super_logits, is_oe)
                 margin_loss = margin_loss_sub + margin_loss_super
                 total = total + self.lambda_margin * margin_loss
+
+            if self.use_energy_margin:
+                energy_margin_sub = self.energy_margin_loss_sub(model_output.sub_logits, is_oe)
+                energy_margin_super = self.energy_margin_loss_super(model_output.super_logits, is_oe)
+                energy_margin_loss = energy_margin_sub + energy_margin_super
+                total = total + self.lambda_energy_margin * energy_margin_loss
 
             return LossOutput(
                 total=total,
